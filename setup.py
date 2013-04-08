@@ -21,8 +21,8 @@ setup(name='swift_basicauth',
       author='Koert van der Veer, CloudVPS',
       author_email='koert@cloudvps.com',
       url='https://github.com/CloudVPS/swift_basicauth',
-      packages=['keystone_v1auth'],
-      requires=['keystone(>=2012.1.0)'],
+      packages=['swift_basicauth'],
+      requires=['swift(>=1.7)'],
       entry_points={'paste.filter_factory':
                         ['basicauth=swift_basicauth.middleware:filter_factory']}
 )
