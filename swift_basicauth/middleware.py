@@ -14,6 +14,7 @@
 
 import base64
 import httplib
+import iso8601
 import json
 
 from swift.common.utils import get_logger, split_path, cache_from_env
@@ -28,21 +29,19 @@ class BasicAuthMiddleware(object):
         self.conf = conf
         self.logger = get_logger(self.conf, log_route='basicauth')
 
-        self.hash_secret = conf['secret']
+        self.token_cache_time = float(conf['token_cache_time'])
 
         # where to find the auth service (we use this to validate tokens)
         self.auth_host = conf['auth_host']
         self.auth_port = int(conf['auth_port'])
         auth_protocol = conf['auth_protocol']
 
-        self.cache_ttl = float(conf['cache_ttl'])
-
         if auth_protocol == 'http':
             self.http_client_class = httplib.HTTPConnection
         else:
             self.http_client_class = httplib.HTTPSConnection
 
-        self.memcache = None
+        self._cache = None
 
     def get_authorization(self, env):
         if 'HTTP_AUTHORIZATION' in env:
@@ -59,12 +58,15 @@ class BasicAuthMiddleware(object):
         return user_name, password
 
     def authorize(self, user_name, tenant_id, password):
-        if self.memcache:
-            key = "%s:%s:%s:%s" %( self.secret, user_name, tenant_id, password)
-            token_info = self.memcache.get(key)
+        # Remove reseller prefix
+        tenant_id = tenant_id.split('_',1)[-1]
 
-            if token_info:
-                return token_info
+        if self._cache:
+            key = "basicauth:%s:%s:%s" %(user_name, tenant_id, password)
+            token = self._cache.get(key)
+
+            if token:
+                return token
 
         conn = self.http_client_class(self.auth_host, self.auth_port)
 
@@ -101,10 +103,22 @@ class BasicAuthMiddleware(object):
             self.logger.warn('Keystone did not return json-encoded body')
             token_info = {}
 
-        if token_info and self.memcache:
-            self.memcache.set(key, token_info, ttl=self.cache_ttl)
+        if token_info and self._cache:
+            token = token_info['access']['token']['id']
+            self._cache.set(key, token, timeout=self.token_cache_time)
 
-        return token_info
+
+            # store the token in memcache
+            key = 'tokens/%s' % token
+            if 'token' in token_info.get('access', {}):
+                timestamp = token_info['access']['token']['expires']
+                expires = iso8601.parse_date(timestamp).strftime('%s')
+
+                self._cache.set(token,
+                                (token_info, expires),
+                                timeout=self.token_cache_time)
+
+            return token
 
     def __call__(self, env, start_response):
 
@@ -112,39 +126,24 @@ class BasicAuthMiddleware(object):
 
         # try to determine the account
         if user_name and password:
+
+
+            if self._cache is None:
+                self._cache = cache_from_env(env)
+
             if ':' in user_name:
                 tenant_id, user_name = user_name.split(':', 1)
             else:
                 _, tenant_id, _ = split_path(env['RAW_PATH_INFO'], 1, 3, True)
 
-            if self.memcache is None:
-                self.memcache = cache_from_env(env)
+            token = self.authorize(user_name, tenant_id, password)
 
-            token_info = self.authorize(user_name, tenant_id, password)
+            if not token:
+                headers = [('WWW-Authenticate', 'Basic realm="Object store"')]
+                start_response("401 Not Authorized", headers)
+                return "Invalid credentials"
 
-            user = token_info['access']['user']
-            #token = token_info['access']['token']
-            roles = ','.join([role['name'] for role in user.get('roles', [])])
-
-            user_id = user['id']
-            user_name = user['name']
-            tenant_name = token_info['tenant']['name']
-
-            env.update({
-                'X-Identity-Status': 'Confirmed',
-                'X-Tenant-Id': tenant_id,
-                'X-Tenant-Name': tenant_name,
-                'X-User-Id': user_id,
-                'X-User-Name': user_name,
-                'X-Roles': roles,
-                # Deprecated
-                'X-User': user_name,
-                'X-Tenant': tenant_name,
-                'X-Role': roles,
-            })
-
-            # TODO: add x-storage-url and x-storage-token to response if we're
-            # mimicking keystone v1 auth
+            env['HTTP_X_AUTH_TOKEN'] = token
 
         return self.app(env, start_response)
 
@@ -157,7 +156,7 @@ def filter_factory(global_conf, **local_conf):
         'auth_host': 'localhost',
         'auth_port': 5000,
         'auth_protocol': 'http',
-        'cache_ttl': 300.0,
+        'token_cache_time': 300.0,
     }
 
     conf.update(global_conf)
