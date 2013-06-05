@@ -30,6 +30,7 @@ class BasicAuthMiddleware(object):
         self.logger = get_logger(self.conf, log_route='basicauth')
 
         self.token_cache_time = float(conf['token_cache_time'])
+        self.storage_url_template = conf['storage_url_template']
 
         # where to find the auth service (we use this to validate tokens)
         self.auth_host = conf['auth_host']
@@ -48,18 +49,18 @@ class BasicAuthMiddleware(object):
             auth_type, authorization = env['HTTP_AUTHORIZATION'].split(None, 1)
             if auth_type.lower() == 'basic':
                 authorization = base64.b64decode(authorization)
-                return authorization.rsplit(':', 1)
+                user_name, password = authorization.rsplit(':', 1)
 
-        user_name = env.get('HTTP_X-STORAGE-USER') or \
-                   env.get('HTTP_X-AUTH-USER')
-        password = env.get('HTTP_X-STORAGE-PASS') or \
-                   env.get('HTTP_X-AUTH-KEY')
+                return user_name, password, False
 
-        return user_name, password
+        user_name = env.get('HTTP_X_STORAGE_USER') or \
+                   env.get('HTTP_X_AUTH_USER')
+        password = env.get('HTTP_X_STORAGE_PASS') or \
+                   env.get('HTTP_X_AUTH_KEY')
+
+        return user_name, password, True
 
     def authorize(self, user_name, tenant_id, password):
-        # Remove reseller prefix
-        tenant_id = tenant_id.split('_',1)[-1]
 
         if self._cache:
             key = "basicauth:%s:%s:%s" %(user_name, tenant_id, password)
@@ -107,7 +108,6 @@ class BasicAuthMiddleware(object):
             token = token_info['access']['token']['id']
             self._cache.set(key, token, timeout=self.token_cache_time)
 
-
             # store the token in memcache
             key = 'tokens/%s' % token
             if 'token' in token_info.get('access', {}):
@@ -122,11 +122,10 @@ class BasicAuthMiddleware(object):
 
     def __call__(self, env, start_response):
 
-        user_name, password = self.get_authorization(env)
+        user_name, password, keystone_v1 = self.get_authorization(env)
 
         # try to determine the account
         if user_name and password:
-
 
             if self._cache is None:
                 self._cache = cache_from_env(env)
@@ -136,14 +135,33 @@ class BasicAuthMiddleware(object):
             else:
                 _, tenant_id, _ = split_path(env['RAW_PATH_INFO'], 1, 3, True)
 
+            # Remove reseller prefix
+            tenant_id = tenant_id.split('_',1)[-1]
+
             token = self.authorize(user_name, tenant_id, password)
 
             if not token:
                 headers = [('WWW-Authenticate', 'Basic realm="Object store"')]
-                start_response("401 Not Authorized", headers)
+                start_response('401 Not Authorized', headers)
                 return "Invalid credentials"
+            elif keystone_v1:
+                # favor original_ version of host and path, as those are provided
+                # for exactly this purpose: url reconstruction.
+                url = self.storage_url_template % {
+                    'host': env.get('HTTP_ORIGINAL_HOST') or env.get('HTTP_HOST', 'localhost'),
+                    'path': env.get('HTTP_ORIGINAL_PATH') or env.get('RAW_PATH_INFO'),
+                    'tenant_id': tenant_id,
+                }
+
+                start_response("204 No content", [
+                    ('X-Storage-Url', url),
+                    ('X-Auth-Token', token),
+                ])
+
+                return ""
 
             env['HTTP_X_AUTH_TOKEN'] = token
+
 
         return self.app(env, start_response)
 
@@ -157,6 +175,7 @@ def filter_factory(global_conf, **local_conf):
         'auth_port': 5000,
         'auth_protocol': 'http',
         'token_cache_time': 300.0,
+        'storage_url_template': 'http://%(host)s/v1/AUTH_%(tenant_id)s',
     }
 
     conf.update(global_conf)
