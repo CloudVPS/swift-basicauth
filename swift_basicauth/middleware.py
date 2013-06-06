@@ -155,6 +155,8 @@ class BasicAuthMiddleware(object):
 
                 start_response("204 No content", [
                     ('X-Storage-Url', url),
+                    ('X-Server-Management-Url', url), # for libcloud
+                    ('X-CDN-Management-Url', url), # for libcloud
                     ('X-Auth-Token', token),
                 ])
 
