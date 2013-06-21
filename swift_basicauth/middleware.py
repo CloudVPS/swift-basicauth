@@ -23,6 +23,7 @@ class KeystoneError(Exception):
     pass
 
 class BasicAuthMiddleware(object):
+
     """HTTP Basic authentication middleware"""
     def __init__(self, app, conf):
         self.app = app
@@ -30,7 +31,8 @@ class BasicAuthMiddleware(object):
         self.logger = get_logger(self.conf, log_route='basicauth')
 
         self.token_cache_time = float(conf['token_cache_time'])
-        self.storage_url_template = conf['storage_url_template']
+        self.storage_url_template = conf['storage_url_template'].replace("^","%")
+        self.realm = conf['realm']
 
         # where to find the auth service (we use this to validate tokens)
         self.auth_host = conf['auth_host']
@@ -104,7 +106,7 @@ class BasicAuthMiddleware(object):
             self.logger.warn('Keystone did not return json-encoded body')
             token_info = {}
 
-        if token_info and self._cache:
+        if response.status == 200 and token_info and self._cache:
             token = token_info['access']['token']['id']
             self._cache.set(key, token, timeout=self.token_cache_time)
 
@@ -143,6 +145,8 @@ class BasicAuthMiddleware(object):
             if not token:
                 headers = [('WWW-Authenticate', 'Basic realm="Object store"')]
                 start_response('401 Not Authorized', headers)
+                self.logger.info('Authentication failed for %s:%s',
+                    tenant_id, user_name)
                 return "Invalid credentials"
             elif keystone_v1:
                 # favor original_ version of host and path, as those are provided
@@ -164,8 +168,18 @@ class BasicAuthMiddleware(object):
 
             env['HTTP_X_AUTH_TOKEN'] = token
 
+        def wrap_start_response(status, headers, exc_info=None):
+            # Append the WWW-authenticate headers for 401 responses, so
+            # browser-based clients can try to authenticate
 
-        return self.app(env, start_response)
+            if status.startswith("401 "):
+                headers = headers.items() if isinstance(headers, dict) else headers
+                headers.append(("WWW-Authenticate", 'Basic realm="%s"' % self.realm))
+
+
+            return start_response(status, headers,exc_info)
+
+        return self.app(env, wrap_start_response)
 
 def filter_factory(global_conf, **local_conf):
     """Standard filter factory to use the middleware with paste.deploy"""
@@ -177,7 +191,8 @@ def filter_factory(global_conf, **local_conf):
         'auth_port': 5000,
         'auth_protocol': 'http',
         'token_cache_time': 300.0,
-        'storage_url_template': 'http://%(host)s/v1/AUTH_%(tenant_id)s',
+        'storage_url_template': 'http://^(host)s/v1/AUTH_^(tenant_id)s',
+        'realm': 'Openstack Swift',
     }
 
     conf.update(global_conf)
