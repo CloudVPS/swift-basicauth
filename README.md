@@ -5,7 +5,6 @@ Add the WSGI filter to `/etc/swift/proxy.conf`.
 
 	[filter:basicauth]
 	use = egg:swift_basicauth#swift_basicauth
-	#secret=ABCDEFG
 	#auth_host=localhost
 	#auth_port=5000
 	#auth_protocol=http

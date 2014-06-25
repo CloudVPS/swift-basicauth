@@ -138,7 +138,7 @@ class BasicAuthMiddleware(object):
                 _, tenant_id, _ = split_path(env['RAW_PATH_INFO'], 1, 3, True)
 
             # Remove reseller prefix
-            tenant_id = tenant_id.split('_',1)[-1]
+            tenant_id = tenant_id.split('_', 1)[-1]
 
             token = self.authorize(user_name, tenant_id, password)
 
@@ -146,21 +146,23 @@ class BasicAuthMiddleware(object):
                 headers = [('WWW-Authenticate', 'Basic realm="Object store"')]
                 start_response('401 Not Authorized', headers)
                 self.logger.info('Authentication failed for %s:%s',
-                    tenant_id, user_name)
+                                 tenant_id, user_name)
                 return "Invalid credentials"
             elif keystone_v1:
-                # favor original_ version of host and path, as those are provided
-                # for exactly this purpose: url reconstruction.
+                # favor original_ version of host and path, as those are
+                # provided for exactly this purpose: url reconstruction.
                 url = self.storage_url_template % {
-                    'host': env.get('HTTP_ORIGINAL_HOST') or env.get('HTTP_HOST', 'localhost'),
-                    'path': env.get('HTTP_ORIGINAL_PATH') or env.get('RAW_PATH_INFO'),
+                    'host': (env.get('HTTP_ORIGINAL_HOST') or
+                             env.get('HTTP_HOST', 'localhost')),
+                    'path': (env.get('HTTP_ORIGINAL_PATH') or
+                             env.get('RAW_PATH_INFO')),
                     'tenant_id': tenant_id,
                 }
 
                 start_response("204 No content", [
                     ('X-Storage-Url', url),
-                    ('X-Server-Management-Url', "None"), # for libcloud
-                    ('X-CDN-Management-Url', "None"), # for libcloud
+                    ('X-Server-Management-Url', "None"),  # for libcloud
+                    ('X-CDN-Management-Url', "None"),  # for libcloud
                     ('X-Auth-Token', token),
                 ])
 
@@ -168,25 +170,38 @@ class BasicAuthMiddleware(object):
 
             env['HTTP_X_AUTH_TOKEN'] = token
 
+        # Append the WWW-authenticate headers for 401 responses, so
+        # browser-based clients can try to authenticate
         def wrap_start_response(status, headers, exc_info=None):
-            # Append the WWW-authenticate headers for 401 responses, so
-            # browser-based clients can try to authenticate
-
             if status.startswith("401 "):
-                headers = headers.items() if isinstance(headers, dict) else headers
-                headers.append(("WWW-Authenticate", 'Basic realm="%s"' % self.realm))
+                headers = (headers.items() if isinstance(headers, dict)
+                           else headers)
+                headers.append(("WWW-Authenticate",
+                                'Basic realm="%s"' % self.realm))
 
+            if exc_info:
+                return start_response(status, headers, exc_info)
+            else:
+                return start_response(status, headers)
 
-            return start_response(status, headers,exc_info)
+        nonbasic_tried = (
+            ('HTTP_X_AUTH_TOKEN' in env)
+            or keystone_v1
+            or 'temp_url_sig=' in env.get('QUERY_STRING', ''))
 
-        return self.app(env, wrap_start_response)
+        if nonbasic_tried:
+            # Don't send www-authenticate when a different auth method was
+            # tried
+            return self.app(env, start_response)
+        else:
+            return self.app(env, wrap_start_response)
+
 
 def filter_factory(global_conf, **local_conf):
     """Standard filter factory to use the middleware with paste.deploy"""
 
     # default configuration
     conf = {
-        'secret': '',
         'auth_host': 'localhost',
         'auth_port': 5000,
         'auth_protocol': 'http',
