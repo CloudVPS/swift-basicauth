@@ -16,7 +16,7 @@
 from setuptools import setup
 
 setup(name='swift_basicauth',
-      version='1.0.0',
+      version='1.0.1',
       description='Basic authentication for Openstack Swift',
       author='Koert van der Veer, CloudVPS',
       author_email='koert@cloudvps.com',
