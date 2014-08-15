@@ -19,8 +19,10 @@ import json
 
 from swift.common.utils import get_logger, split_path, cache_from_env
 
+
 class KeystoneError(Exception):
     pass
+
 
 class BasicAuthMiddleware(object):
 
@@ -55,17 +57,17 @@ class BasicAuthMiddleware(object):
 
                 return user_name, password, False
 
-        user_name = env.get('HTTP_X_STORAGE_USER') or \
-                   env.get('HTTP_X_AUTH_USER')
-        password = env.get('HTTP_X_STORAGE_PASS') or \
-                   env.get('HTTP_X_AUTH_KEY')
+        user_name = (env.get('HTTP_X_STORAGE_USER') or
+                     env.get('HTTP_X_AUTH_USER'))
+        password = (env.get('HTTP_X_STORAGE_PASS') or
+                    env.get('HTTP_X_AUTH_KEY'))
 
-        return user_name, password, True
+        return user_name, password, bool(user_name or password)
 
     def authorize(self, user_name, tenant_id, password):
 
         if self._cache:
-            key = "basicauth:%s:%s:%s" %(user_name, tenant_id, password)
+            key = "basicauth:%s:%s:%s" % (user_name, tenant_id, password)
             token = self._cache.get(key)
 
             if token:
@@ -79,8 +81,8 @@ class BasicAuthMiddleware(object):
         }
 
         body = {
-            "auth":{
-                "passwordCredentials":{
+            "auth": {
+                "passwordCredentials": {
                     "username": user_name,
                     "password": password
                 },
