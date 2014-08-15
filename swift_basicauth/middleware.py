@@ -108,17 +108,17 @@ class BasicAuthMiddleware(object):
             self.logger.warn('Keystone did not return json-encoded body')
             token_info = {}
 
-        if response.status == 200 and token_info and self._cache:
+        if response.status == 200 and token_info:
             token = token_info['access']['token']['id']
-            self._cache.set(key, token, timeout=self.token_cache_time)
 
-            # store the token in memcache
-            key = 'tokens/%s' % token
-            if 'token' in token_info.get('access', {}):
+            if self._cache:
+                self._cache.set(key, token, timeout=self.token_cache_time)
+
+                # store the token in memcache
                 timestamp = token_info['access']['token']['expires']
                 expires = iso8601.parse_date(timestamp).strftime('%s')
 
-                self._cache.set(token,
+                self._cache.set('tokens/%s' % token,
                                 (token_info, expires),
                                 timeout=self.token_cache_time)
 
