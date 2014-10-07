@@ -112,7 +112,7 @@ class BasicAuthMiddleware(object):
             token = token_info['access']['token']['id']
 
             if self._cache:
-                self._cache.set(key, token, timeout=self.token_cache_time)
+                self._cache.set(key, token, time=self.token_cache_time)
 
                 # store the token in memcache
                 timestamp = token_info['access']['token']['expires']
@@ -120,7 +120,7 @@ class BasicAuthMiddleware(object):
 
                 self._cache.set('tokens/%s' % token,
                                 (token_info, expires),
-                                timeout=self.token_cache_time)
+                                time=self.token_cache_time)
 
             return token
 
